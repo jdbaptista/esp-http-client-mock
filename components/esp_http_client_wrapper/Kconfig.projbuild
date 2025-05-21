@@ -1,0 +1,23 @@
+menu "ESP Client Wrapper"
+
+    config MOCK_ESP_HTTP_CLIENT
+        bool "Mock ESP Client Wrapper"
+        default n
+        help
+            Whether to mock the esp_http_client_wrapper component.
+
+    config MAX_NUM_CLIENT_ENDPOINTS
+        int "Max Number of Mock ESP Client Endpoints"
+        default 1
+        help
+            The maximum number of http urls that can be added to the mock
+            esp_http_client component, allowing clients to request multiple
+            endpoints during a single test.
+
+    config TEST_ESP_HTTP_CLIENT_WRAPPER
+        bool "Test esp_http_client_wrapper"
+        default n
+        help
+            Whether to enable testing features for the esp_http_client_wrapper component.
+
+endmenu
