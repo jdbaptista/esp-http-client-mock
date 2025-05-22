@@ -47,6 +47,8 @@ typedef struct {
  */
 void mock_esp_http_client_setup(void);
 
+void mock_esp_http_client_register_fail_callback(void (*callback)(void));
+
 esp_err_t mock_esp_http_client_add_endpoint(const MockHttpEndpoint endpoint);
 
 esp_err_t mock_esp_http_client_remove_endpoint(const char *url);

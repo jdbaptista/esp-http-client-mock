@@ -8,6 +8,8 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "esp_check.h"
+#include "esp_err.h"
 #include "esp_http_client.h"
 #include "sdkconfig.h"
 
@@ -20,6 +22,8 @@
 #define STATIC_IF_NOT_TEST static
 #endif /* CONFIG_TEST_ESP_HTTP_CLIENT_WRAPPER */
 
+#define TAG "mock_http_client"
+
 #define MOCK_CLIENT_MAGIC 0x49A5
 
 typedef struct {
@@ -30,6 +34,8 @@ typedef struct {
 } mock_http_client;
 
 STATIC_IF_NOT_TEST MockHttpEndpoint endpoints[CONFIG_MAX_NUM_CLIENT_ENDPOINTS];
+
+STATIC_IF_NOT_TEST void (*failCallback)(void) = NULL;
 
 /**
  * @returns endpoint index corresponding to url. If url does
@@ -50,7 +56,7 @@ static size_t getEndpointNdx(const char *url)
 /**
  * @brief Initializes the mock esp_http_client component.
  * 
- * @note This clears any existing endpoints.
+ * @note This clears any existing endpoints and callbacks.
  */
 void mock_esp_http_client_setup(void)
 {
@@ -61,6 +67,18 @@ void mock_esp_http_client_setup(void)
         endpoints[i].contentLen = 0;
         endpoints[i].responseCode = 0;
     }
+    failCallback = NULL;
+}
+
+/**
+ * @brief Registers a callback to run if any mock function fails so that
+ * the source of errors can be discovered more easily.
+ * 
+ * @note If NULL, then no callback will be executed if a mock function fails.
+ */
+void mock_esp_http_client_register_fail_callback(void (*callback)(void))
+{
+    failCallback = callback;
 }
 
 /**
@@ -156,15 +174,17 @@ esp_err_t mock_esp_http_client_verify(void)
 
 esp_http_client_handle_t wrap_esp_http_client_init(const esp_http_client_config_t *config)
 {
+    esp_http_client_handle_t ret = NULL;
     mock_http_client *mockClient;
     
     /* input guards */
-    if (config == NULL) return NULL;
-    if (config->url == NULL) return NULL;
+    ESP_GOTO_ON_FALSE(config != NULL && config->url != NULL, 
+        NULL, handle_error, TAG, "config != NULL");
 
     /* allocate and create mock client */
     mockClient = malloc(sizeof(mock_http_client));
-    if (mockClient == NULL) return NULL;
+    ESP_GOTO_ON_FALSE(mockClient != NULL, 
+        NULL, handle_error, TAG, "mockClient != NULL");
 
     mockClient->currentURL = config->url;
     mockClient->opened = false;
@@ -172,110 +192,157 @@ esp_http_client_handle_t wrap_esp_http_client_init(const esp_http_client_config_
     mockClient->magic = MOCK_CLIENT_MAGIC;
 
     return (esp_http_client_handle_t) mockClient;
+handle_error:
+    if (failCallback != NULL) failCallback();
+    return ret;
 }
 
 esp_err_t wrap_esp_http_client_set_url(esp_http_client_handle_t client, const char *url)
 {
+    esp_err_t ret;
     mock_http_client *mockClient;
 
     /* input guards */
-    if (client == NULL) return ESP_ERR_INVALID_ARG;
-    if (url == NULL) return ESP_ERR_INVALID_ARG;
+    ESP_GOTO_ON_FALSE(client != NULL && url != NULL, 
+        ESP_ERR_INVALID_ARG, handle_error, TAG, "client != NULL && url != NULL");
 
     /* ensure client is actually a mock */
     mockClient = (mock_http_client *) client;
-    if (mockClient->magic != MOCK_CLIENT_MAGIC) return ESP_ERR_INVALID_ARG;
-    if (mockClient->opened) return ESP_ERR_INVALID_STATE;
+    ESP_GOTO_ON_FALSE(mockClient->magic == MOCK_CLIENT_MAGIC, 
+        ESP_ERR_INVALID_ARG, handle_error, TAG, "mockClient->magic == MOCK_CLIENT_MAGIC");
+    ESP_GOTO_ON_FALSE(!mockClient->opened, 
+        ESP_ERR_NOT_SUPPORTED, handle_error, TAG, "!mockClient->opened");
 
     /* set url */
     mockClient->currentURL = url;
     mockClient->responseNdx = 0;
     return ESP_OK;
+handle_error:
+    if (failCallback != NULL) failCallback();
+    return ret;
 }
 
 esp_err_t wrap_esp_http_client_open(esp_http_client_handle_t client, int write_len)
 {
+    esp_err_t ret;
     mock_http_client *mockClient;
     /* input guards */
-    if (client == NULL) return ESP_ERR_INVALID_ARG;
-    if (write_len != 0) return ESP_ERR_NOT_SUPPORTED; // TODO: support writing
+    ESP_GOTO_ON_FALSE(client != NULL, 
+        ESP_ERR_INVALID_ARG, handle_error, TAG, "client != NULL");
+    ESP_GOTO_ON_FALSE(write_len == 0, 
+        ESP_ERR_NOT_SUPPORTED, handle_error, TAG, "write_len == 0");
 
     /* ensure client is actually a mock */
     mockClient = (mock_http_client *) client;
-    if (mockClient->magic != MOCK_CLIENT_MAGIC) return ESP_ERR_INVALID_ARG;
+    ESP_GOTO_ON_FALSE(mockClient->magic == MOCK_CLIENT_MAGIC, 
+        ESP_ERR_INVALID_ARG, handle_error, TAG, "mockClient->magic == MOCK_CLIENT_MAGIC");
 
     /* open mock client */
-    if (mockClient->opened) return ESP_ERR_INVALID_STATE;
+    ESP_GOTO_ON_FALSE(!mockClient->opened, 
+        ESP_ERR_INVALID_STATE, handle_error, TAG, "!mockClient->opened");
+
     mockClient->opened = true;
     mockClient->responseNdx = 0;
     return ESP_OK;
+handle_error:
+    if (failCallback != NULL) failCallback();
+    return ret;
 }
 
 int wrap_esp_http_client_get_status_code(esp_http_client_handle_t client)
 {
+    esp_err_t ret;
     mock_http_client *mockClient;
     int endpointNdx;
 
     /* input guards */
-    if (client == NULL) return ESP_ERR_INVALID_ARG;
+    ESP_GOTO_ON_FALSE(client != NULL, 
+        ESP_ERR_INVALID_ARG, handle_error, TAG, "client != NULL");
 
     /* ensure client is actually a mock */
     mockClient = (mock_http_client *) client;
-    if (mockClient->magic != MOCK_CLIENT_MAGIC) return ESP_ERR_INVALID_ARG;
-    if (mockClient->currentURL == NULL) return ESP_ERR_INVALID_STATE;
-    if (!mockClient->opened) return ESP_ERR_INVALID_STATE;
+    ESP_GOTO_ON_FALSE(mockClient->magic == MOCK_CLIENT_MAGIC, 
+        ESP_ERR_INVALID_ARG, handle_error, TAG, "mockClient->magic == MOCK_CLIENT_MAGIC");
+        
+    ESP_GOTO_ON_FALSE(mockClient->currentURL != NULL, 
+        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->currentURL != NULL");
+    ESP_GOTO_ON_FALSE(mockClient->opened, 
+        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->opened");
 
     /* retrieve status code */
     endpointNdx = getEndpointNdx(mockClient->currentURL);
-    if (endpointNdx >= CONFIG_MAX_NUM_CLIENT_ENDPOINTS) return ESP_ERR_NOT_FOUND;
+    ESP_GOTO_ON_FALSE(endpointNdx < CONFIG_MAX_NUM_CLIENT_ENDPOINTS, 
+        ESP_ERR_NOT_FOUND, handle_error, TAG, "endpointNdx < CONFIG_MAX_NUM_CLIENT_ENDPOINTS");
+
     return endpoints[endpointNdx].responseCode;
+handle_error:
+    if (failCallback != NULL) failCallback();
+    return -((int) ret);
 }
 
 int64_t wrap_esp_http_client_get_content_length(esp_http_client_handle_t client)
 {
+    int64_t ret;
     mock_http_client *mockClient;
     int endpointNdx;
 
     /* input guards */
-    if (client == NULL) return ESP_ERR_INVALID_ARG;
+    ESP_GOTO_ON_FALSE(client != NULL,
+        ESP_ERR_INVALID_ARG, handle_error, TAG, "client != NULL");
 
     /* ensure client is actually a mock */
     mockClient = (mock_http_client *) client;
-    if (mockClient->magic != MOCK_CLIENT_MAGIC) return ESP_ERR_INVALID_ARG;
-    if (mockClient->currentURL == NULL) return ESP_ERR_INVALID_STATE;
-    if (!mockClient->opened) return ESP_ERR_INVALID_STATE;
+    ESP_GOTO_ON_FALSE(mockClient->magic == MOCK_CLIENT_MAGIC,
+        ESP_ERR_INVALID_ARG, handle_error, TAG, "mockClient->magic == MOCK_CLIENT_MAGIC");
+    ESP_GOTO_ON_FALSE(mockClient->currentURL != NULL,
+        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->currentURL != NULL");
+    ESP_GOTO_ON_FALSE(mockClient->opened,
+        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->opened");
 
     /* retrieve status code */
     endpointNdx = getEndpointNdx(mockClient->currentURL);
-    if (endpointNdx >= CONFIG_MAX_NUM_CLIENT_ENDPOINTS) return ESP_ERR_NOT_FOUND;
+    ESP_GOTO_ON_FALSE(endpointNdx < CONFIG_MAX_NUM_CLIENT_ENDPOINTS,
+        ESP_ERR_NOT_FOUND, handle_error, TAG, "endpointNdx < CONFIG_MAX_NUM_CLIENT_ENDPOINTS");
+
     return endpoints[endpointNdx].contentLen;
+handle_error:
+    if (failCallback != NULL) failCallback();
+    return -ret;
 }
 
 int wrap_esp_http_client_read(esp_http_client_handle_t client, char *buffer, int len)
 {
+    int ret;
     mock_http_client *mockClient;
     MockHttpEndpoint currEndpoint;
     int endpointNdx;
     int readLen;
 
     /* input guards */
-    if (client == NULL) return ESP_ERR_INVALID_ARG;
-    if (len == 0) return ESP_ERR_INVALID_ARG;
+    ESP_GOTO_ON_FALSE(client != NULL,
+        ESP_ERR_INVALID_ARG, handle_error, TAG, "client != NULL");
+    ESP_GOTO_ON_FALSE(len != 0,
+        ESP_ERR_INVALID_ARG, handle_error, TAG, "len != 0");
 
     /* ensure client is actually a mock */
     mockClient = (mock_http_client *) client;
-    if (mockClient->magic != MOCK_CLIENT_MAGIC) return ESP_ERR_INVALID_ARG;
+    ESP_GOTO_ON_FALSE(mockClient->magic == MOCK_CLIENT_MAGIC,
+        ESP_ERR_INVALID_ARG, handle_error, TAG, "mockClient->magic == MOCK_CLIENT_MAGIC");
 
-    if (mockClient->currentURL == NULL) return ESP_ERR_INVALID_STATE;
-    if (!mockClient->opened) return ESP_ERR_INVALID_STATE;   
+    ESP_GOTO_ON_FALSE(mockClient->currentURL != NULL,
+        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->currentURL != NULL");
+    ESP_GOTO_ON_FALSE(mockClient->opened,
+        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->opened");
 
     /* determine endpoint */
     endpointNdx = getEndpointNdx(mockClient->currentURL);
-    if (endpointNdx == CONFIG_MAX_NUM_CLIENT_ENDPOINTS) return ESP_ERR_NOT_FOUND;
+    ESP_GOTO_ON_FALSE(endpointNdx != CONFIG_MAX_NUM_CLIENT_ENDPOINTS,
+        ESP_ERR_NOT_FOUND, handle_error, TAG, "endpointNdx != CONFIG_MAX_NUM_CLIENT_ENDPOINTS");
     currEndpoint = endpoints[endpointNdx];
 
     /* continue reading from response */
-    if (mockClient->responseNdx >= currEndpoint.contentLen) return ESP_ERR_INVALID_STATE;
+    ESP_GOTO_ON_FALSE(mockClient->responseNdx < currEndpoint.contentLen,
+        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->responseNdx < currEndpoint.contentLen");
     if (currEndpoint.contentLen - mockClient->responseNdx >= len)
     {
         readLen = len;
@@ -288,42 +355,94 @@ int wrap_esp_http_client_read(esp_http_client_handle_t client, char *buffer, int
     memcpy(buffer, &(currEndpoint.response[mockClient->responseNdx]), readLen);
     mockClient->responseNdx += readLen;
     return readLen;
+handle_error:
+    if (failCallback != NULL) failCallback();
+    return -ret;
 }
 
 esp_err_t wrap_esp_http_client_close(esp_http_client_handle_t client)
 {
+    esp_err_t ret;
     mock_http_client *mockClient;
-    int endpointNdx;
 
     /* input guards */
-    if (client == NULL) return ESP_ERR_INVALID_ARG;
+    ESP_GOTO_ON_FALSE(client != NULL,
+        ESP_ERR_INVALID_ARG, handle_error, TAG, "client != NULL");
 
     /* ensure client is actually a mock */
     mockClient = (mock_http_client *) client;
-    if (mockClient->magic != MOCK_CLIENT_MAGIC) return ESP_ERR_INVALID_ARG;
+    ESP_GOTO_ON_FALSE(mockClient->magic == MOCK_CLIENT_MAGIC,
+        ESP_ERR_INVALID_ARG, handle_error, TAG, "mockClient->magic == MOCK_CLIENT_MAGIC");
 
-    if (mockClient->currentURL == NULL) return ESP_ERR_INVALID_STATE;
-    if (!mockClient->opened) return ESP_ERR_INVALID_STATE;
+    ESP_GOTO_ON_FALSE(mockClient->currentURL != NULL,
+        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->currentURL == NULL");
+    ESP_GOTO_ON_FALSE(mockClient->opened,
+        ESP_ERR_INVALID_STATE, handle_error, TAG, "!mockClient->opened");
 
     mockClient->opened = false;
     mockClient->responseNdx = 0;
     return ESP_OK;
+handle_error:
+    if (failCallback != NULL) failCallback();
+    return ret;
 }
 
 esp_err_t wrap_esp_http_client_cleanup(esp_http_client_handle_t client)
 {
+    esp_err_t ret;
     mock_http_client *mockClient;
-    int endpointNdx;
 
     /* input guards */
-    if (client == NULL) return ESP_ERR_INVALID_ARG;
+    ESP_GOTO_ON_FALSE(client != NULL,
+        ESP_ERR_INVALID_ARG, handle_error, TAG, "client == NULL");
 
     /* ensure client is actually a mock */
     mockClient = (mock_http_client *) client;
-    if (mockClient->magic != MOCK_CLIENT_MAGIC) return ESP_ERR_INVALID_ARG;
+    ESP_GOTO_ON_FALSE(mockClient->magic == MOCK_CLIENT_MAGIC,
+        ESP_ERR_INVALID_ARG, handle_error, TAG, "mockClient->magic == MOCK_CLIENT_MAGIC");
 
-    if (mockClient->currentURL == NULL) return ESP_ERR_INVALID_STATE;
+    ESP_GOTO_ON_FALSE(mockClient->currentURL != NULL,
+        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->currentURL != NULL");
 
     free(mockClient);
     return ESP_OK;
+handle_error:
+    if (failCallback != NULL) failCallback();
+    return ret;
+}
+
+esp_err_t wrap_esp_http_client_flush_response(esp_http_client_handle_t client, int *len)
+{
+    esp_err_t ret;
+    mock_http_client *mockClient;
+    MockHttpEndpoint currEndpoint;
+    int endpointNdx;
+
+    /* input guards */
+    ESP_GOTO_ON_FALSE(client != NULL,
+        ESP_ERR_INVALID_ARG, handle_error, TAG, "client != NULL");
+
+    /* ensure client is actually a mock */
+    mockClient = (mock_http_client *) client;
+    ESP_GOTO_ON_FALSE(mockClient->magic == MOCK_CLIENT_MAGIC,
+        ESP_ERR_INVALID_ARG, handle_error, TAG, "mockClient->magic == MOCK_CLIENT_MAGIC");
+
+    ESP_GOTO_ON_FALSE(mockClient->currentURL != NULL,
+        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->currentURL == NULL");
+    ESP_GOTO_ON_FALSE(mockClient->opened,
+        ESP_ERR_INVALID_STATE, handle_error, TAG, "!mockClient->opened");
+
+    /* determine endpoint */
+    endpointNdx = getEndpointNdx(mockClient->currentURL);
+    ESP_GOTO_ON_FALSE(endpointNdx != CONFIG_MAX_NUM_CLIENT_ENDPOINTS,
+        ESP_ERR_NOT_FOUND, handle_error, TAG, "endpointNdx != CONFIG_MAX_NUM_CLIENT_ENDPOINTS");
+    currEndpoint = endpoints[endpointNdx];
+
+    /* update mockClient pointer to end of endpoint */
+    mockClient->responseNdx = currEndpoint.contentLen;
+
+    return ESP_OK;
+handle_error:
+    if (failCallback != NULL) failCallback();
+    return ret;
 }
