@@ -28,7 +28,7 @@
 
 typedef struct {
     bool opened;
-    const char *currentURL;
+    const char *currentURL; // points to heap memory
     size_t responseNdx;
     int magic; // to ensure the esp_http_client_handle_t is actually a mock
 } mock_http_client;
@@ -178,15 +178,39 @@ esp_http_client_handle_t wrap_esp_http_client_init(const esp_http_client_config_
     mock_http_client *mockClient;
     
     /* input guards */
-    ESP_GOTO_ON_FALSE(config != NULL && config->url != NULL, 
+    ESP_GOTO_ON_FALSE(config != NULL, 
         NULL, handle_error, TAG, "config != NULL");
+    ESP_GOTO_ON_FALSE(config->url != NULL || (config->host != NULL && config->path != NULL),
+        NULL, handle_error, TAG, "config url/path/host is NULL");
 
     /* allocate and create mock client */
     mockClient = malloc(sizeof(mock_http_client));
     ESP_GOTO_ON_FALSE(mockClient != NULL, 
         NULL, handle_error, TAG, "mockClient != NULL");
 
-    mockClient->currentURL = config->url;
+    if (config->url == NULL)
+    {
+        mockClient->currentURL = malloc(sizeof(char) * (strlen(config->host) + strlen(config->path) + 1));
+        if (mockClient->currentURL == NULL)
+        {
+            free(mockClient);
+            ESP_LOGE(TAG, "mockClient->currentURL != NULL");
+            goto handle_error;
+        }
+        strncpy(mockClient->currentURL, config->host, strlen(config->host));
+        strncat(mockClient->currentURL, config->path, strlen(config->path));
+    } else
+    {
+        mockClient->currentURL = malloc(sizeof(char) * strlen(config->url));
+        if (mockClient->currentURL == NULL)
+        {
+            free(mockClient);
+            ESP_LOGE(TAG, "mockClient->currentURL != NULL");
+            goto handle_error;
+        }
+        strncpy(mockClient->currentURL, config->url, strlen(config->url));
+    }
+
     mockClient->opened = false;
     mockClient->responseNdx = 0;
     mockClient->magic = MOCK_CLIENT_MAGIC;
@@ -404,6 +428,7 @@ esp_err_t wrap_esp_http_client_cleanup(esp_http_client_handle_t client)
     ESP_GOTO_ON_FALSE(mockClient->currentURL != NULL,
         ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->currentURL != NULL");
 
+    free(mockClient->currentURL);
     free(mockClient);
     return ESP_OK;
 handle_error:
