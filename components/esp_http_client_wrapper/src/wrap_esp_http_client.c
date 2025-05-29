@@ -28,7 +28,8 @@
 
 typedef struct {
     bool opened;
-    const char *currentURL; // points to heap memory
+    char *currentURL; // points to heap memory. This is the url of the response.
+    char *nextURL; // points to heap memory. This is the url currently set.
     size_t responseNdx;
     int magic; // to ensure the esp_http_client_handle_t is actually a mock
 } mock_http_client;
@@ -190,27 +191,29 @@ esp_http_client_handle_t wrap_esp_http_client_init(const esp_http_client_config_
 
     if (config->url == NULL)
     {
-        mockClient->currentURL = malloc(sizeof(char) * (strlen(config->host) + strlen(config->path) + 1));
-        if (mockClient->currentURL == NULL)
+        mockClient->nextURL = malloc(sizeof(char) * (strlen(config->host) + strlen(config->path) + 1));
+        if (mockClient->nextURL == NULL)
         {
             free(mockClient);
-            ESP_LOGE(TAG, "mockClient->currentURL != NULL");
+            ESP_LOGE(TAG, "mockClient->nextURL != NULL");
             goto handle_error;
         }
-        strncpy(mockClient->currentURL, config->host, strlen(config->host));
-        strncat(mockClient->currentURL, config->path, strlen(config->path));
+        strncpy(mockClient->nextURL, config->host, strlen(config->host) + 1);
+        strncat(mockClient->nextURL, config->path, strlen(config->path));
     } else
     {
-        mockClient->currentURL = malloc(sizeof(char) * strlen(config->url));
-        if (mockClient->currentURL == NULL)
+        mockClient->nextURL = malloc(sizeof(char) * strlen(config->url) + 1);
+        if (mockClient->nextURL == NULL)
         {
             free(mockClient);
-            ESP_LOGE(TAG, "mockClient->currentURL != NULL");
+            ESP_LOGE(TAG, "mockClient->nextURL != NULL");
             goto handle_error;
         }
-        strncpy(mockClient->currentURL, config->url, strlen(config->url));
+        strncpy(mockClient->nextURL, config->url, strlen(config->url) + 1);
     }
 
+    mockClient->currentURL = NULL;
+    mockClient->nextURL = NULL;
     mockClient->opened = false;
     mockClient->responseNdx = 0;
     mockClient->magic = MOCK_CLIENT_MAGIC;
@@ -238,8 +241,15 @@ esp_err_t wrap_esp_http_client_set_url(esp_http_client_handle_t client, const ch
         ESP_ERR_NOT_SUPPORTED, handle_error, TAG, "!mockClient->opened");
 
     /* set url */
-    mockClient->currentURL = url;
     mockClient->responseNdx = 0;
+
+    if (mockClient->nextURL != NULL) free(mockClient->nextURL);
+
+    mockClient->nextURL = malloc(sizeof(char) * (strlen(url) + 1));
+    ESP_GOTO_ON_FALSE(mockClient->nextURL != NULL,
+        ESP_ERR_NO_MEM, handle_error, TAG, "mockClient->currentURL != NULL");
+
+    strncpy(mockClient->nextURL, url, strlen(url) + 1);
     return ESP_OK;
 handle_error:
     if (failCallback != NULL) failCallback();
@@ -261,12 +271,19 @@ esp_err_t wrap_esp_http_client_open(esp_http_client_handle_t client, int write_l
     ESP_GOTO_ON_FALSE(mockClient->magic == MOCK_CLIENT_MAGIC, 
         ESP_ERR_INVALID_ARG, handle_error, TAG, "mockClient->magic == MOCK_CLIENT_MAGIC");
 
-    /* open mock client */
-    ESP_GOTO_ON_FALSE(!mockClient->opened, 
+    /* open mock client & establish new endpoint */
+    ESP_GOTO_ON_FALSE(!mockClient->opened,
         ESP_ERR_INVALID_STATE, handle_error, TAG, "!mockClient->opened");
+    ESP_GOTO_ON_FALSE(mockClient->nextURL != NULL,
+        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->nextURL != NULL");
 
     mockClient->opened = true;
     mockClient->responseNdx = 0;
+
+    if (mockClient->currentURL != NULL) free(mockClient->currentURL);
+    mockClient->currentURL = mockClient->nextURL; // transfer ownership of heap memory
+    mockClient->nextURL = NULL;
+
     return ESP_OK;
 handle_error:
     if (failCallback != NULL) failCallback();
@@ -353,10 +370,11 @@ int wrap_esp_http_client_read(esp_http_client_handle_t client, char *buffer, int
     ESP_GOTO_ON_FALSE(mockClient->magic == MOCK_CLIENT_MAGIC,
         ESP_ERR_INVALID_ARG, handle_error, TAG, "mockClient->magic == MOCK_CLIENT_MAGIC");
 
-    ESP_GOTO_ON_FALSE(mockClient->currentURL != NULL,
-        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->currentURL != NULL");
-    ESP_GOTO_ON_FALSE(mockClient->opened,
-        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->opened");
+    if (mockClient->currentURL == NULL)
+    {
+        ESP_LOGW(TAG, "esp_http_client_read called with NULL currentURL!");
+        return 0; // simulates the behavior of the actual function
+    }
 
     /* determine endpoint */
     endpointNdx = getEndpointNdx(mockClient->currentURL);
@@ -365,8 +383,11 @@ int wrap_esp_http_client_read(esp_http_client_handle_t client, char *buffer, int
     currEndpoint = endpoints[endpointNdx];
 
     /* continue reading from response */
-    ESP_GOTO_ON_FALSE(mockClient->responseNdx < currEndpoint.contentLen,
-        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->responseNdx < currEndpoint.contentLen");
+    if (mockClient->responseNdx >= currEndpoint.contentLen)
+    {
+        return 0; // nothing left to read
+    }
+
     if (currEndpoint.contentLen - mockClient->responseNdx >= len)
     {
         readLen = len;
@@ -405,6 +426,10 @@ esp_err_t wrap_esp_http_client_close(esp_http_client_handle_t client)
 
     mockClient->opened = false;
     mockClient->responseNdx = 0;
+
+    free(mockClient->currentURL);
+    mockClient->currentURL = NULL;
+
     return ESP_OK;
 handle_error:
     if (failCallback != NULL) failCallback();
@@ -425,10 +450,9 @@ esp_err_t wrap_esp_http_client_cleanup(esp_http_client_handle_t client)
     ESP_GOTO_ON_FALSE(mockClient->magic == MOCK_CLIENT_MAGIC,
         ESP_ERR_INVALID_ARG, handle_error, TAG, "mockClient->magic == MOCK_CLIENT_MAGIC");
 
-    ESP_GOTO_ON_FALSE(mockClient->currentURL != NULL,
-        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->currentURL != NULL");
+    if (mockClient->currentURL != NULL) free(mockClient->currentURL);
+    if (mockClient->nextURL != NULL) free(mockClient->nextURL);
 
-    free(mockClient->currentURL);
     free(mockClient);
     return ESP_OK;
 handle_error:
