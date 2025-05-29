@@ -199,7 +199,7 @@ esp_http_client_handle_t wrap_esp_http_client_init(const esp_http_client_config_
             goto handle_error;
         }
         strncpy(mockClient->nextURL, config->host, strlen(config->host) + 1);
-        strncat(mockClient->nextURL, config->path, strlen(config->path));
+        strcat(mockClient->nextURL, config->path);
     } else
     {
         mockClient->nextURL = malloc(sizeof(char) * strlen(config->url) + 1);
