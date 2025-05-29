@@ -213,7 +213,6 @@ esp_http_client_handle_t wrap_esp_http_client_init(const esp_http_client_config_
     }
 
     mockClient->currentURL = NULL;
-    mockClient->nextURL = NULL;
     mockClient->opened = false;
     mockClient->responseNdx = 0;
     mockClient->magic = MOCK_CLIENT_MAGIC;
