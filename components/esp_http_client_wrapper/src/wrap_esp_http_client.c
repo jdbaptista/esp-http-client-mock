@@ -276,6 +276,25 @@ esp_err_t wrap_esp_http_client_open(esp_http_client_handle_t client, int write_l
     ESP_GOTO_ON_FALSE(mockClient->nextURL != NULL,
         ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->nextURL != NULL");
 
+    /* check that nextURL is a valid endpoint */
+    bool foundEndpoint = false;
+    for (size_t i = 0; i < CONFIG_MAX_NUM_CLIENT_ENDPOINTS; i++)
+    {
+        if (endpoints[i].url == NULL) continue;
+        if (strcmp(endpoints[i].url, mockClient->nextURL) != 0) continue;
+        foundEndpoint = true;
+        break;
+    }
+
+    // ESP_GOTO_ON_FALSE(foundEndpoint,
+    //     ESP_ERR_NOT_FOUND, handle_error, TAG, "Invalid endpoint: %s", mockClient->nextURL);
+    if (!foundEndpoint)
+    {
+        ESP_LOGE(TAG, "Invalid endpoint: %s", mockClient->nextURL);
+        ret = ESP_ERR_NOT_FOUND;
+        goto handle_error;
+    }
+
     mockClient->opened = true;
     mockClient->responseNdx = 0;
 
