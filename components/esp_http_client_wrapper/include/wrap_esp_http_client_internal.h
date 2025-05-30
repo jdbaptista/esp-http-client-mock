@@ -41,7 +41,7 @@ esp_err_t wrap_esp_http_client_set_url(esp_http_client_handle_t client, const ch
 // esp_err_t wrap_esp_http_client_delete_all_headers(esp_http_client_handle_t client);
 esp_err_t wrap_esp_http_client_open(esp_http_client_handle_t client, int write_len);
 // int wrap_esp_http_client_write(esp_http_client_handle_t client, const char *buffer, int len);
-// int64_t wrap_esp_http_client_fetch_headers(esp_http_client_handle_t client);
+int64_t wrap_esp_http_client_fetch_headers(esp_http_client_handle_t client);
 // bool wrap_esp_http_client_is_chunked_response(esp_http_client_handle_t client);
 int wrap_esp_http_client_read(esp_http_client_handle_t client, char *buffer, int len);
 int wrap_esp_http_client_get_status_code(esp_http_client_handle_t client);

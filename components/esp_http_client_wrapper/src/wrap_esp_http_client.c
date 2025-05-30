@@ -28,6 +28,7 @@
 
 typedef struct {
     bool opened;
+    bool hasHeaders;
     char *currentURL; // points to heap memory. This is the url of the response.
     char *nextURL; // points to heap memory. This is the url currently set.
     size_t responseNdx;
@@ -179,6 +180,7 @@ esp_http_client_handle_t wrap_esp_http_client_init(const esp_http_client_config_
     mock_http_client *mockClient;
     
     /* input guards */
+    ESP_LOGW(TAG, "initializing mock client");
     ESP_GOTO_ON_FALSE(config != NULL, 
         NULL, handle_error, TAG, "config != NULL");
     ESP_GOTO_ON_FALSE(config->url != NULL || (config->host != NULL && config->path != NULL),
@@ -214,6 +216,7 @@ esp_http_client_handle_t wrap_esp_http_client_init(const esp_http_client_config_
 
     mockClient->currentURL = NULL;
     mockClient->opened = false;
+    mockClient->hasHeaders = false;
     mockClient->responseNdx = 0;
     mockClient->magic = MOCK_CLIENT_MAGIC;
 
@@ -236,7 +239,7 @@ esp_err_t wrap_esp_http_client_set_url(esp_http_client_handle_t client, const ch
     mockClient = (mock_http_client *) client;
     ESP_GOTO_ON_FALSE(mockClient->magic == MOCK_CLIENT_MAGIC, 
         ESP_ERR_INVALID_ARG, handle_error, TAG, "mockClient->magic == MOCK_CLIENT_MAGIC");
-    ESP_GOTO_ON_FALSE(!mockClient->opened, 
+    ESP_GOTO_ON_FALSE(!mockClient->opened,
         ESP_ERR_NOT_SUPPORTED, handle_error, TAG, "!mockClient->opened");
 
     /* set url */
@@ -260,6 +263,7 @@ esp_err_t wrap_esp_http_client_open(esp_http_client_handle_t client, int write_l
     esp_err_t ret;
     mock_http_client *mockClient;
     /* input guards */
+    ESP_LOGW(TAG, "opening mock client");
     ESP_GOTO_ON_FALSE(client != NULL, 
         ESP_ERR_INVALID_ARG, handle_error, TAG, "client != NULL");
     ESP_GOTO_ON_FALSE(write_len == 0, 
@@ -286,16 +290,17 @@ esp_err_t wrap_esp_http_client_open(esp_http_client_handle_t client, int write_l
         break;
     }
 
-    // ESP_GOTO_ON_FALSE(foundEndpoint,
-    //     ESP_ERR_NOT_FOUND, handle_error, TAG, "Invalid endpoint: %s", mockClient->nextURL);
-    if (!foundEndpoint)
-    {
-        ESP_LOGE(TAG, "Invalid endpoint: %s", mockClient->nextURL);
-        ret = ESP_ERR_NOT_FOUND;
-        goto handle_error;
-    }
+    ESP_GOTO_ON_FALSE(foundEndpoint,
+        ESP_ERR_NOT_FOUND, handle_error, TAG, "Invalid endpoint: %s", mockClient->nextURL);
+    // if (!foundEndpoint)
+    // {
+    //     ESP_LOGE(TAG, "Invalid endpoint: %s", mockClient->nextURL);
+    //     ret = ESP_ERR_NOT_FOUND;
+    //     goto handle_error;
+    // }
 
     mockClient->opened = true;
+    mockClient->hasHeaders = false;
     mockClient->responseNdx = 0;
 
     if (mockClient->currentURL != NULL) free(mockClient->currentURL);
@@ -327,6 +332,8 @@ int wrap_esp_http_client_get_status_code(esp_http_client_handle_t client)
         ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->currentURL != NULL");
     ESP_GOTO_ON_FALSE(mockClient->opened, 
         ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->opened");
+    ESP_GOTO_ON_FALSE(mockClient->hasHeaders,
+        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->hasHeaders");
 
     /* retrieve status code */
     endpointNdx = getEndpointNdx(mockClient->currentURL);
@@ -337,6 +344,38 @@ int wrap_esp_http_client_get_status_code(esp_http_client_handle_t client)
 handle_error:
     if (failCallback != NULL) failCallback();
     return -((int) ret);
+}
+
+int64_t wrap_esp_http_client_fetch_headers(esp_http_client_handle_t client)
+{
+    int64_t ret;
+    mock_http_client *mockClient;
+    int endpointNdx;
+
+    /* input guards */
+    ESP_GOTO_ON_FALSE(client != NULL, 
+        ESP_ERR_INVALID_ARG, handle_error, TAG, "client != NULL");
+
+    /* ensure client is actually a mock */
+    mockClient = (mock_http_client *) client;
+    ESP_GOTO_ON_FALSE(mockClient->magic == MOCK_CLIENT_MAGIC, 
+        ESP_ERR_INVALID_ARG, handle_error, TAG, "mockClient->magic == MOCK_CLIENT_MAGIC");
+        
+    ESP_GOTO_ON_FALSE(mockClient->currentURL != NULL, 
+        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->currentURL != NULL");
+    ESP_GOTO_ON_FALSE(mockClient->opened, 
+        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->opened");
+    
+    /* retrieve status code & update hasHeaders */
+    endpointNdx = getEndpointNdx(mockClient->currentURL);
+    ESP_GOTO_ON_FALSE(endpointNdx < CONFIG_MAX_NUM_CLIENT_ENDPOINTS,
+        ESP_ERR_NOT_FOUND, handle_error, TAG, "endpointNdx < CONFIG_MAX_NUM_CLIENT_ENDPOINTS");
+
+    mockClient->hasHeaders = true;
+    return endpoints[endpointNdx].contentLen;
+handle_error:
+    if (failCallback != NULL) failCallback();
+    return -ret;
 }
 
 int64_t wrap_esp_http_client_get_content_length(esp_http_client_handle_t client)
@@ -357,6 +396,8 @@ int64_t wrap_esp_http_client_get_content_length(esp_http_client_handle_t client)
         ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->currentURL != NULL");
     ESP_GOTO_ON_FALSE(mockClient->opened,
         ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->opened");
+    ESP_GOTO_ON_FALSE(mockClient->hasHeaders,
+        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->hasHeaders");
 
     /* retrieve status code */
     endpointNdx = getEndpointNdx(mockClient->currentURL);
@@ -443,6 +484,7 @@ esp_err_t wrap_esp_http_client_close(esp_http_client_handle_t client)
         ESP_ERR_INVALID_STATE, handle_error, TAG, "!mockClient->opened");
 
     mockClient->opened = false;
+    mockClient->hasHeaders = false;
     mockClient->responseNdx = 0;
 
     free(mockClient->currentURL);

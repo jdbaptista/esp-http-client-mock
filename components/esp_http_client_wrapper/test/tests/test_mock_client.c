@@ -61,7 +61,7 @@ TEST_CASE("client_initAndCleanup", "[wrap_http_client]")
     mallocCntr = 0;
     mockClient = wrap_esp_http_client_init(&config);
     TEST_ASSERT_NOT_EQUAL(NULL, mockClient);
-    TEST_ASSERT_NOT_EQUAL(0, mallocCntr);
+    TEST_ASSERT_EQUAL(2, mallocCntr);
 
     err = wrap_esp_http_client_cleanup(mockClient);
     TEST_ASSERT_EQUAL(ESP_OK, err);
@@ -94,7 +94,7 @@ TEST_CASE("client_integration1", "[wrap_http_client]")
     mallocCntr = 0;
     mockClient = wrap_esp_http_client_init(&config);
     TEST_ASSERT_NOT_EQUAL(NULL, mockClient);
-    TEST_ASSERT_NOT_EQUAL(0, mallocCntr);
+    TEST_ASSERT_EQUAL(2, mallocCntr);
 
     err = wrap_esp_http_client_open(mockClient, 0);
     TEST_ASSERT_EQUAL(ESP_OK, err);
@@ -137,7 +137,7 @@ TEST_CASE("client_integration2", "[wrap_http_client]")
     mallocCntr = 0;
     mockClient = wrap_esp_http_client_init(&config);
     TEST_ASSERT_NOT_EQUAL(NULL, mockClient);
-    TEST_ASSERT_NOT_EQUAL(0, mallocCntr);
+    TEST_ASSERT_EQUAL(2, mallocCntr);
 
     err = wrap_esp_http_client_open(mockClient, 0);
     TEST_ASSERT_EQUAL(ESP_OK, err);
@@ -185,7 +185,7 @@ TEST_CASE("client_closeTwice", "[wrap_http_client]")
     mallocCntr = 0;
     mockClient = wrap_esp_http_client_init(&config);
     TEST_ASSERT_NOT_EQUAL(NULL, mockClient);
-    TEST_ASSERT_NOT_EQUAL(0, mallocCntr);
+    TEST_ASSERT_EQUAL(2, mallocCntr);
 
     err = wrap_esp_http_client_open(mockClient, 0);
     TEST_ASSERT_EQUAL(ESP_OK, err);
@@ -234,7 +234,7 @@ TEST_CASE("client_failCallback", "[wrap_http_client]")
 
     mockClient = wrap_esp_http_client_init(&config);
     TEST_ASSERT_NOT_EQUAL(NULL, mockClient);
-    TEST_ASSERT_NOT_EQUAL(0, mallocCntr);
+    TEST_ASSERT_EQUAL(2, mallocCntr);
 
     err = wrap_esp_http_client_open(mockClient, 0);
     TEST_ASSERT_EQUAL(ESP_OK, err);
@@ -253,4 +253,19 @@ TEST_CASE("client_failCallback", "[wrap_http_client]")
     err = wrap_esp_http_client_cleanup(mockClient);
     TEST_ASSERT_EQUAL(ESP_OK, err);
     TEST_ASSERT_EQUAL(0, mallocCntr);
+}
+
+TEST_CASE("client_noleftovers", "[wrap_http_client]")
+{
+    const char example_file_start[] asm("_binary_example_file_txt_start");
+    const char example_file_end[] asm("_binary_example_file_txt_end");
+
+    const esp_http_client_config_t config = {
+        .url = "https://bearanvil.com"
+    };
+
+    const MockHttpEndpoint endpoint = {
+        .url = "https://bearanvil.com"
+        .contentLen = strlen(response) + 1, // need to include null-terminator
+    }
 }
