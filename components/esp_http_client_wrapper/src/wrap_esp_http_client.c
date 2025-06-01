@@ -536,10 +536,17 @@ esp_err_t wrap_esp_http_client_flush_response(esp_http_client_handle_t client, i
     ESP_GOTO_ON_FALSE(mockClient->magic == MOCK_CLIENT_MAGIC,
         ESP_ERR_INVALID_ARG, handle_error, TAG, "mockClient->magic == MOCK_CLIENT_MAGIC");
 
-    ESP_GOTO_ON_FALSE(mockClient->currentURL != NULL,
-        ESP_ERR_INVALID_STATE, handle_error, TAG, "mockClient->currentURL == NULL");
-    ESP_GOTO_ON_FALSE(mockClient->opened,
-        ESP_ERR_INVALID_STATE, handle_error, TAG, "!mockClient->opened");
+    if (mockClient->currentURL == NULL) 
+    {
+        ESP_LOGW(TAG, "flushing response with NULL URL");
+        return ESP_OK; // simulate actual behavior
+    }
+
+    if (!mockClient->opened)
+    {
+        ESP_LOGW(TAG, "flushing response with unopened client");
+        return ESP_OK; // simulate actual behavior
+    }
 
     /* determine endpoint */
     endpointNdx = getEndpointNdx(mockClient->currentURL);
